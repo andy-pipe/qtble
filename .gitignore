@@ -1,0 +1,16 @@
+GELIN.sh
+boot/
+kernel/*
+!kernel/*.config
+system/*
+!system/rootfs_custom
+system/rootfs_custom/usr/local/bin/qtble
+system/rootfs_custom/usr/local/bin/debug
+workspace/.metadata/
+Makefile*
+!Makefile.in
+ui_*.h
+moc_*.h
+moc_*.cpp
+*.prl
+*.a
