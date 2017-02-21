@@ -33,8 +33,6 @@ then
 	mkfifo "$tOBJ"
 fi
 
-sh /usr/local/bin/connect.sh &
-
 gatttool -b "$btadr" -I <> "$fifoin" > "$fifoout" &
 /usr/local/bin/qtble -qws
 

@@ -1,4 +1,4 @@
-#define cr_apiKeyStream		"## fill in ##"
-#define cr_apiKeyReadOnly	"## fill in ##"
-#define cr_apiKeyFull 		"## fill in ##"
-#define cr_device 		"## fill in ##"
+#define cr_apiKeyStream		"a80798ece6c59dc43f5753e1b232689981729091740d288be00fd6d431ea85d2"
+#define cr_apiKeyReadOnly	"444f9f25f73815ecea2e30bda8810de9a28f2b04482b7f807ea5dc75a43e0534"
+#define cr_apiKeyFull 		"73071443d414aadf4e7a3f218abbaccdc1aa5e6e6fb09b9ab587487b37f664d3"
+#define cr_device 			"BEP2@andy_pipe.andy_pipe"

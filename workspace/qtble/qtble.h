@@ -5,6 +5,8 @@
 #include <QDebug>
 #include <QTimer>
 #include <QDateTime>
+#include <QThread>
+#include <QNetworkConfigurationManager>
 #include <GESys/ge_persistent_value.h>
 
 #include "ui_qtble.h"
@@ -24,9 +26,17 @@ private slots:
 	void readPipe();
 	void sendData();
 	void showDateTime();
+	void watchdog();
 	void button_clickedCloud();
+	void onNetworkStateChanged(bool isOnline);
 
 };
+
+/* class Worker : public QThread {
+    Q_OBJECT
+private slots:
+
+}; */
 
 float getNumberFromQString(const QString &xString);
 void sensorTmp007Convert(uint16_t rawAmbTemp, uint16_t rawObjTemp, float *tAmb, float *tObj);

@@ -7,7 +7,6 @@
 
 #include "qtble.h"
 
-
 int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
@@ -20,6 +19,7 @@ int main(int argc, char *argv[])
 #endif // __arm__
 
 	Qtble w;
+
 	w.show();
 	return app.exec();
 }

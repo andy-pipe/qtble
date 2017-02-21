@@ -16,8 +16,9 @@
 #define handlePres "0x0031"
 #define handleLight "0x0041"
 #define handleKey "0x0049"
-#define loop_ms 66
-#define send_ms 1333
+#define loop_ms 90		//Loop time to check for new feedback
+#define send_ms 1333    //Loop time to send data to cloud
+#define wd_ms 5000      //Watchdog timeout
 
 const std::string apiKeyStream(cr_apiKeyStream);
 const std::string apiKeyReadOnly(cr_apiKeyReadOnly);
@@ -36,32 +37,46 @@ int sKey1, sKey2, sKey3;
 
 QTimer *sectimer = new QTimer();
 QTimer *sendtimer = new QTimer();
+QTimer *wdtimer = new QTimer();
+
+QNetworkConfigurationManager ncm;
 
 Qtble::Qtble(QWidget *parent) :
 	QMainWindow(parent)
 {
+
 	_ui.setupUi(this);
 #ifdef __arm__
 	setWindowState(windowState() | Qt::WindowFullScreen);
 #endif
 	_ui.BLEconnected->setText("<font color='red'>BLE offline</font>");
 	_ui.pushButtonCloud->setText("Cloud off");
-	fdi.open((QIODevice::WriteOnly | QIODevice::Text));
-    out << "connect" << endl;
-    out.flush();
-    fdo = open(fifoout, O_RDONLY);;
 
-	sectimer->start(loop_ms);
+	//Initialize connection to command pipe
+	fdi.open((QIODevice::WriteOnly | QIODevice::Text));
+
+	//Initialize connection to feedback pipe
+    fdo = open(fifoout, O_RDONLY | O_NONBLOCK);
+
+	//Initialize timer to periodically read feedback pipe
+    sectimer->start(loop_ms);
 	connect(sectimer, SIGNAL(timeout()), this, SLOT(readPipe()));
 
+	//Initialize connection to periodically send data to cloud method
 	connect(sendtimer, SIGNAL(timeout()), this, SLOT(sendData()));
 
+	//Initialize button to initiate send data to cloud
+	connect(_ui.pushButtonCloud, SIGNAL(clicked()), this, SLOT(button_clickedCloud()));
+
+	//Initialize timer to peridically update date/time status line
 	QTimer *datetimer = new QTimer();
 	datetimer->start(1000);
 	connect(datetimer, SIGNAL(timeout()), this, SLOT(showDateTime()));
 
-	connect(_ui.pushButtonCloud, SIGNAL(clicked()), this, SLOT(button_clickedCloud()));
+	//Initialize watchdog
+	QObject::connect(wdtimer, SIGNAL(timeout()), this, SLOT(watchdog()));
 
+	connect(&ncm, SIGNAL(onlineStateChanged(bool)), this, SLOT(onNetworkStateChanged(bool)));
 }
 
 
@@ -76,147 +91,163 @@ void Qtble::readPipe()
 
     char buf[MAX_BUF];
     int nindex;
-	ssize_t len = 0;
+    ssize_t len = 0;
 	//qDebug() << "tick";
-    if ((len = read(fdo, buf, MAX_BUF)) > 0) {
+	if (! connected) {
+	    out << "connect" << endl; //Initiate connection
+	    out.flush();
+	}
+	if ((len = read(fdo, buf, MAX_BUF)) > 0) {
         buf[len] = 0;
         //printf("Length:   %d\n", (int)len);
-        //printf("%s", buf);
-        QString line = QString(buf);
-        qDebug() << line;
-        if (line.contains("quit")) {
-        	qApp->exit();
-        }
-        /* if (line.contains("tAmb")) {
-        	qDebug() << "tAmb!!";
-        	float tAmb = getNumberFromQString(line);
-        	qDebug() << tAmb;
-        	_ui.progressBarAmb->setValue(tAmb);
-        } */
-        if (line.contains("Connection successful")) {
-        	qDebug() << "Connected";
-        	_ui.BLEconnected->setText("<font color='green'>BLE connected</font>");
-        	connected = true;
-        }
-        if (connected && (! initialized)) {
-            out << "char-write-req 0x004A 0100" << endl; //Keys enabled
-            out.flush();
-            out << "char-write-req 0x0046 65" << endl;   //LUXmeter period
-            out.flush();
-            out << "char-write-req 0x0042 0100" << endl; //LUXmeter notification
-            out.flush();
-            out << "char-write-req 0x0044 01" << endl;   //LUXmeter enabled
-            out.flush();
-            out << "char-write-req 0x0026 67" << endl;   //Temperature period
-            out.flush();
-            out << "char-write-req 0x0022 0100" << endl; //Temperature notification
-            out.flush();
-            out << "char-write-req 0x0024 01" << endl;   //Temperature enabled
-            out.flush();
-            out << "char-write-req 0x0036 69" << endl;   //Pressure period
-            out.flush();
-            out << "char-write-req 0x0032 0100" << endl; //Pressure notification
-            out.flush();
-            out << "char-write-req 0x0034 01" << endl;   //Pressure enabled
-            out.flush();
-            out << "char-write-req 0x002E 66" << endl;   //Humidity period
-            out.flush();
-            out << "char-write-req 0x002A 0100" << endl; //Humidity notification
-            out.flush();
-            out << "char-write-req 0x002C 01" << endl;   //Humidity enabled
-            out.flush();
-            initialized = true;
-        }
-        if ((nindex = line.indexOf("Notification handle = "))  >= 0) {
-           	//qDebug() << "Notification!!";
-        	line = line.mid(nindex, 53);
-           	if (line.contains(handleTemp)) {
-               	//qDebug() << "Temperature!";
-           		line = line.left(47);
-           		//qDebug() << line;
-               	uint16_t tAmb, tObj;
-               	float ftAmb, ftObj;
-               	bool ok;
-               	int index = line.indexOf("value:") + 7;
-               	tAmb = line.mid(index,2).toInt(&ok, 16) + 256 * line.mid(index + 3,2).toInt(&ok, 16);
-               	tObj = line.mid(index + 6,2).toInt(&ok, 16) + 256 * line.mid(index + 9,2).toInt(&ok, 16);
-               	//qDebug() << "tAmb=" << tAmb << " tObj="<<tObj;
-               	sensorTmp007Convert(tAmb, tObj, &ftAmb, &ftObj);
-               	//qDebug() << "tAmb=" << ftAmb << "°C ... tObj="<<ftObj<<"°C";
-               	_ui.progressBarAmb->setValue(ftAmb);
-               	_ui.progressBarObj->setValue(ftObj);
-               	sAmb = round(ftAmb);
-               	sObj = round(ftObj);
-         	}
-           	if (line.contains(handleHum)) {
-               	//qDebug() << "Humidity";
-           		line = line.left(47);
-           		//qDebug() << line;
-               	uint16_t Hum;
-               	float fHum, fTemp;
-               	bool ok;
-               	int index = line.indexOf("value:") + 7;
-               	Hum = line.mid(index + 6,2).toInt(&ok, 16) + 256 * line.mid(index + 9,2).toInt(&ok, 16);
-               	//qDebug() << "Hum=" << Hum;
-               	sensorHdc1000Convert(0, Hum, &fTemp, &fHum);
-               	//qDebug() << "Hum=" << fHum << "%r.h.";
-               	_ui.progressBarHum->setValue(fHum);
-               	sHum = round(fHum);
-           	}
-           	if (line.contains(handlePres)) {
-               	//qDebug() << "Pressure!";
-               	uint32_t tTemp, tPres;
-               	float fTemp, fPres;
-               	bool ok;
-               	//qDebug() << line;
-               	int index = line.indexOf("value:") + 7;
-               	//tTemp = line.mid(index,2).toInt(&ok, 16) +
-               			256 * line.mid(index + 3,2).toInt(&ok, 16) +
-               			65536 * line.mid(index + 6,2).toInt(&ok, 16);
-               	tPres = line.mid(index + 9,2).toInt(&ok, 16) +
-               			256 * line.mid(index + 12,2).toInt(&ok, 16) +
-               			65536 * line.mid(index + 15,2).toInt(&ok, 16);
-               	//qDebug() << "Temp=" << tTemp << " Pres="<<tPres;
-               	//fTemp = calcBmp280(tTemp);
-               	fPres = calcBmp280(tPres);
-               	//qDebug() << "Pres="<<fPres<<"hPa";
-               	_ui.progressBarPres->setValue(fPres);
-               	sPres = round(fPres);
-           	}
-           	if (line.contains(handleLight)) {
-               	//qDebug() << "Light!";
-               	uint16_t light;
-               	int iLUX;
-               	bool ok;
-           		line = line.left(41);
-           		//qDebug() << line;
-               	int index = line.indexOf("value:") + 7;
-               	light = line.mid(index + 0,2).toInt(&ok, 16) + 256 * line.mid(index + 3,2).toInt(&ok, 16);
-               	//qDebug() << "Light=" << light;
-               	iLUX = (int) sensorOpt3001Convert(light);
-               	//qDebug() << "LUX=" << iLUX;
-               	_ui.lcdNumberLUX->display(iLUX);
-               	sLux = iLUX;
-           	}
-           	if (line.contains(handleKey)) {
-               	//qDebug() << "Key!";
-               	int keys;
-               	bool ok;
-           		line = line.left(38);
-           		//qDebug() << line;
-               	int index = line.indexOf("value:") + 7;
-               	keys = line.mid(index,2).toInt(&ok, 16) & 0x07;
-               	//qDebug() << "Key=" << keys;
-               	sKey1 = keys & 0x01;
-               	_ui.progressBarKey1->setValue(sKey1);
-               	sKey2 = (keys & 0x02)>>1;
-               	_ui.progressBarKey2->setValue(sKey2);
-               	sKey3 = (keys & 0x04)>>2;
-               	_ui.progressBarReed->setValue(sKey3);
-           	}
-        }
+        //qDebug() << "Buffer [" << len << "]: " << endl;
+		//printf("%s", buf);
+		//qDebug() << endl;
+		QString input = QString(buf);
+		//qDebug() << "Input: " << endl;
+		qDebug() << input << endl;
+        QStringList list = input.split('\n');
+		//qDebug() << "List: " << endl;
+    	for(int i = 0; i < (list.length()) ;i++) {
+    		QString line = list.at(i);
+    		//qDebug() << i << " .. " << endl << line << endl;
+			if (line.contains("quit")) {
+				qApp->exit();
+			}
+			if (line.contains("Connection successful")) {
+				qDebug() << "Connected";
+				_ui.BLEconnected->setText("<font color='green'>BLE connected</font>");
+				connected = true;
+			}
+			if (line.contains("Characteristic value")) {
+				qDebug() << " ... still alive" << endl;
+				wdtimer->start(wd_ms);
+			}
+			if (line.contains("Disconnected")) {
+				qDebug() << "Disconnected";
+				_ui.BLEconnected->setText("<font color='red'>BLE offline</font>");
+				wdtimer->stop();
+				connected = false;
+				initialized = false;
+			}
+			if (connected && (! initialized)) {
+				out << "char-write-req 0x004A 0100" << endl; //Keys enabled
+				out.flush();
+				out << "char-write-req 0x0046 65" << endl;   //LUXmeter period
+				out.flush();
+				out << "char-write-req 0x0042 0100" << endl; //LUXmeter notification
+				out.flush();
+				out << "char-write-req 0x0044 01" << endl;   //LUXmeter enabled
+				out.flush();
+				out << "char-write-req 0x0026 67" << endl;   //Temperature period
+				out.flush();
+				out << "char-write-req 0x0022 0100" << endl; //Temperature notification
+				out.flush();
+				out << "char-write-req 0x0024 01" << endl;   //Temperature enabled
+				out.flush();
+				out << "char-write-req 0x0036 69" << endl;   //Pressure period
+				out.flush();
+				out << "char-write-req 0x0032 0100" << endl; //Pressure notification
+				out.flush();
+				out << "char-write-req 0x0034 01" << endl;   //Pressure enabled
+				out.flush();
+				out << "char-write-req 0x002E 66" << endl;   //Humidity period
+				out.flush();
+				out << "char-write-req 0x002A 0100" << endl; //Humidity notification
+				out.flush();
+				out << "char-write-req 0x002C 01" << endl;   //Humidity enabled
+				out.flush();
+				initialized = true;
+				wdtimer->start(wd_ms);
+			}
+			if (connected && ((nindex = line.indexOf("Notification handle = ")))  >= 0) {
+				//qDebug() << "Notification!!" << endl;
+				wdtimer->start(wd_ms);
+				if (line.contains(handleTemp)) {
+					//qDebug() << "Temperature!";
+					//qDebug() << line;
+					uint16_t tAmb, tObj;
+					float ftAmb, ftObj;
+					bool ok;
+					int index = line.indexOf("value:") + 7;
+					tAmb = line.mid(index,2).toInt(&ok, 16) + 256 * line.mid(index + 3,2).toInt(&ok, 16);
+					tObj = line.mid(index + 6,2).toInt(&ok, 16) + 256 * line.mid(index + 9,2).toInt(&ok, 16);
+					//qDebug() << "tAmb=" << tAmb << " tObj="<<tObj;
+					sensorTmp007Convert(tAmb, tObj, &ftAmb, &ftObj);
+					//qDebug() << "tAmb=" << ftAmb << "°C ... tObj="<<ftObj<<"°C";
+					_ui.progressBarAmb->setValue(ftAmb);
+					_ui.progressBarObj->setValue(ftObj);
+					sAmb = round(ftAmb);
+					sObj = round(ftObj);
+				}
+				if (line.contains(handleHum)) {
+					//qDebug() << "Humidity";
+					//qDebug() << line;
+					uint16_t Hum;
+					float fHum, fTemp;
+					bool ok;
+					int index = line.indexOf("value:") + 7;
+					Hum = line.mid(index + 6,2).toInt(&ok, 16) + 256 * line.mid(index + 9,2).toInt(&ok, 16);
+					//qDebug() << "Hum=" << Hum;
+					sensorHdc1000Convert(0, Hum, &fTemp, &fHum);
+					//qDebug() << "Hum=" << fHum << "%r.h.";
+					_ui.progressBarHum->setValue(fHum);
+					sHum = round(fHum);
+				}
+				if (line.contains(handlePres)) {
+					//qDebug() << "Pressure!";
+					uint32_t tPres;
+					//uint32_t tTemp;
+					float fPres;
+					//float fTemp;
+					bool ok;
+					//qDebug() << line;
+					int index = line.indexOf("value:") + 7;
+					//tTemp = line.mid(index,2).toInt(&ok, 16) +
+					//256 * line.mid(index + 3,2).toInt(&ok, 16) +
+					//65536 * line.mid(index + 6,2).toInt(&ok, 16);
+					tPres = line.mid(index + 9,2).toInt(&ok, 16) +
+							256 * line.mid(index + 12,2).toInt(&ok, 16) +
+							65536 * line.mid(index + 15,2).toInt(&ok, 16);
+					//qDebug() << "Temp=" << tTemp << " Pres="<<tPres;
+					//fTemp = calcBmp280(tTemp);
+					fPres = calcBmp280(tPres);
+					//qDebug() << "Pres="<<fPres<<"hPa";
+					_ui.progressBarPres->setValue(fPres);
+					sPres = round(fPres);
+				}
+				if (line.contains(handleLight)) {
+					//qDebug() << "Light!";
+					uint16_t light;
+					int iLUX;
+					bool ok;
+					//qDebug() << line;
+					int index = line.indexOf("value:") + 7;
+					light = line.mid(index + 0,2).toInt(&ok, 16) + 256 * line.mid(index + 3,2).toInt(&ok, 16);
+					//qDebug() << "Light=" << light;
+					iLUX = (int) sensorOpt3001Convert(light);
+					//qDebug() << "LUX=" << iLUX;
+					_ui.lcdNumberLUX->display(iLUX);
+					sLux = iLUX;
+				}
+				if (line.contains(handleKey)) {
+					//qDebug() << "Key!";
+					int keys;
+					bool ok;
+					//qDebug() << line;
+					int index = line.indexOf("value:") + 7;
+					keys = line.mid(index,2).toInt(&ok, 16) & 0x07;
+					//qDebug() << "Key=" << keys;
+					sKey1 = keys & 0x01;
+					_ui.progressBarKey1->setValue(sKey1);
+					sKey2 = (keys & 0x02)>>1;
+					_ui.progressBarKey2->setValue(sKey2);
+					sKey3 = (keys & 0x04)>>2;
+					_ui.progressBarReed->setValue(sKey3);
+				}
+	    	}
+		}
     }
-	//qCritical("button clicked %u times", ++_click_counter);
 }
 
 
@@ -225,6 +256,22 @@ void Qtble::sendData()
 {
 	const char* url = "http://api.carriots.com/streams";
 	const char* contentType = "Content-Type: application/json";
+
+	struct entry {
+		std::string item;
+		std::string value;
+	};
+
+	QList<entry> dataList;
+
+	//dataList.append((struct entry)("tAMB"; sAmb));
+
+	/* QStringList dataList =
+
+			input.split('\n');
+			//qDebug() << "List: " << endl;
+	    	for(int i = 0; i < (list.length()) ;i++) {
+	    		QString line = list.at(i); */
 
 	//qDebug() << "Sending";
 
@@ -297,6 +344,20 @@ void Qtble::showDateTime()
 	QDateTime dateTime = QDateTime::currentDateTime();
 	_ui.labelDateTime->setText(dateTime.toString("dddd d.M.yyyy hh:mm:ss"));
 }
+
+
+void Qtble::watchdog()
+{
+	qDebug() << "Watchdog ... " << endl;
+	out << "char-read-hnd 0x01" << endl; //Check if connection alive
+	out.flush();
+}
+
+void Qtble::onNetworkStateChanged(bool isOnline)
+{
+    qDebug() << "Network state changed, now" << isOnline;
+}
+
 
 float getNumberFromQString(const QString &xString)
 {
